@@ -14,7 +14,14 @@ const app = express();
 
 // Setup
 if (!fs.existsSync('./uploads')) fs.mkdirSync('./uploads');
-app.use(cors());
+app.use(cors({
+    origin: [
+        "http://localhost:5173", 
+        "https://flashcard-frontend-git-main-aayush190205s-projects.vercel.app" // Your Vercel URL from the screenshot
+    ],
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    credentials: true
+}));
 app.use(express.json());
 
 const upload = multer({ dest: 'uploads/' });
