@@ -14,13 +14,18 @@ const app = express();
 
 // Setup
 if (!fs.existsSync('./uploads')) fs.mkdirSync('./uploads');
+// src/app.js
+
+// src/app.js
+
 app.use(cors({
     origin: [
         "http://localhost:5173", 
-        "https://flashcard-frontend-git-main-aayush190205s-projects.vercel.app" // Your Vercel URL from the screenshot
+        "https://flashcard-frontend-two.vercel.app" // Your EXACT Vercel URL from the error
     ],
-    methods: ["GET", "POST", "PUT", "DELETE"],
-    credentials: true
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    credentials: true,
+    allowedHeaders: ["Content-Type", "Authorization"]
 }));
 app.use(express.json());
 
