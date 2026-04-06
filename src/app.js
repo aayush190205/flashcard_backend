@@ -78,7 +78,7 @@ app.delete('/api/pdf/:id', async (req, res) => {
     }
 });
 
-// --- ROUTE 4: CHAT ---
+// --- ROUTE 4: CHAT (WITH SOCRATIC STATE MACHINE) ---
 app.post('/api/chat/ask', async (req, res) => {
     try {
         const { message, documentId, history } = req.body;
@@ -96,7 +96,18 @@ app.post('/api/chat/ask', async (req, res) => {
             messages: [
                 {
                     role: "system",
-                    content: `You are a Strict AI Tutor. Context: "${context}"`
+                    content: `You are a Strict Socratic AI Tutor. 
+                    Context from Document: "${context}"
+
+                    CRITICAL RULES (STATE MACHINE LOGIC):
+                    1. If the user asks a normal question, answer it directly and thoroughly based ONLY on the context.
+                    2. If the user prompt contains "[STUDENT_STUCK]" or they ask for a hint:
+                       - DO NOT give them the direct answer to their previous question.
+                       - Enter "Remediation State".
+                       - Break the concept down into a simpler, foundational concept.
+                       - Ask them a guiding question to lead them to the answer.
+                    3. Congratulate them warmly when they connect the dots themselves.
+                    4. If the information is not in the context at all, say "This document doesn't cover that."`
                 },
                 ...conversationContext,
                 { role: "user", content: message }
@@ -111,7 +122,6 @@ app.post('/api/chat/ask', async (req, res) => {
         res.status(500).json({ success: false, message: "AI Error" });
     }
 });
-
 // --- ROUTE 5: FLASHCARD GENERATOR ---
 app.post('/api/flashcards/generate', async (req, res) => {
     try {
@@ -181,39 +191,68 @@ app.post('/api/flashcards/generate', async (req, res) => {
         res.status(500).json({ success: false });
     }
 });
-// --- ROUTE 6: USER STATUS ---
-app.get('/api/user/status', async (req, res) => {
+// --- ROUTE 5: DYNAMIC FLASHCARD REMEDIATION ---
+app.post('/api/flashcards/remediate', async (req, res) => {
     try {
-        const { clerkId } = req.query;
-        if(!clerkId) return res.json({ isPro: false, streak: 0 });
+        const { front, back, documentId } = req.body;
+        if (!documentId) return res.status(400).json({ success: false, message: "Missing Document ID" });
 
-        let user = await User.findOne({ clerkId });
-        if (!user) {
-            user = new User({ clerkId, isPro: false, streak: 1, lastActiveDate: new Date() });
-            await user.save();
-            return res.json({ isPro: false, streak: 1 });
-        }
+        const doc = await Document.findById(documentId);
+        const context = doc.extractedText.substring(0, 15000); 
 
-        const today = new Date();
-        const lastDate = user.lastActiveDate ? new Date(user.lastActiveDate) : new Date(0); 
-        const isSameDay = (d1, d2) => d1.toDateString() === d2.toDateString();
-        const yesterday = new Date();
-        yesterday.setDate(yesterday.getDate() - 1);
+        const completion = await groq.chat.completions.create({
+            messages: [
+                {
+                    role: "system",
+                    content: `You are an expert Socratic AI tutor.
+                    
+                    The user just failed THIS specific flashcard:
+                    [FAILED QUESTION]: "${front}"
+                    [FAILED ANSWER]: "${back}"
 
-        if (!isSameDay(today, lastDate)) {
-            if (isSameDay(lastDate, yesterday)) user.streak += 1;
-            else user.streak = 1;
-            
-            user.lastActiveDate = today;
-            await user.save();
-        }
+                    BACKGROUND CONTEXT: "${context}"
 
-        res.json({ isPro: user.isPro, streak: user.streak || 0 });
-    } catch (e) {
-        res.status(500).json({ isPro: false, streak: 0 });
+                    TASK: Generate exactly TWO new flashcards to help the user understand the FAILED ANSWER. Do NOT summarize the whole document. Focus STRICTLY on the failed concept.
+                    
+                    CARD 1 STRATEGY: Ask a fundamental question that defines the core term or prerequisite concept from the FAILED QUESTION.
+                    CARD 2 STRATEGY: Ask a guiding "fill-in-the-blank" or simpler hint question that bridges Card 1 directly to the FAILED ANSWER.
+                    
+                    STRICT OUTPUT FORMAT:
+                    [Question Text]
+                    [Answer Text]
+                    ---
+                    [Question Text]
+                    [Answer Text]
+                    
+                    RULES:
+                    1. Output ONLY the two cards.
+                    2. Separate them with "---".
+                    3. Do NOT use prefixes like "Q:" or "Answer:".`
+                },
+                { role: "user", content: "Generate my 2 specific remediation cards now." }
+            ],
+            model: "llama-3.3-70b-versatile",
+            temperature: 0.5, 
+        });
+
+        const text = completion.choices[0].message.content;
+        const rawCards = text.split('---');
+        const newCards = rawCards.map(block => {
+            const lines = block.trim().split('\n').map(l => l.trim()).filter(l => l);
+            if (lines.length >= 2) {
+                let f = lines[0].replace(/^(Question|Q|Front)[:\.-]\s*/i, '');
+                let b = lines[1].replace(/^(Answer|A|Back)[:\.-]\s*/i, '');
+                return { front: f, back: b, isRemediation: true }; 
+            }
+            return null;
+        }).filter(c => c !== null).slice(0, 2); 
+
+        res.json({ success: true, flashcards: newCards });
+    } catch (error) {
+        console.error("Remediation Error:", error);
+        res.status(500).json({ success: false, message: "AI Error" });
     }
 });
-
 // --- ROUTE 7: AUTH SYNC ---
 app.post('/api/auth/sync', async (req, res) => {
     try {
